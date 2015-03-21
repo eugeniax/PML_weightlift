@@ -1,0 +1,150 @@
+---
+title: "Weight Lifting Exercise Prediction"
+author: "Eugenia"
+output: html_document
+---
+## Executive Summary
+While in the 'quantified self' movement, health enthusiasts regularly measure how much they perform a particular activity, they often neglect how well they do it. In this project, we will use the Weight Lifiting Exercise Dataset to build a model and predict how well the activity was performed. The data was from accelerometers on the belt, forearm, arm and dumbbell of 6 participants. They were instructed to perform weight lifting in 5 ways as recorded in `classe`:
+
+* Class A: exactly according to the specification
+* Class B: throwing the elbows to the front
+* Class C: lifting the dumbbell only halfway
+* Class D: lowering the dumbbell only halfway
+* Class E: throwing the hips to the front
+
+More information about the dataset is available at http://groupware.les.inf.puc-rio.br/har 
+
+## Loading and Cleaning Data
+```{r message=FALSE, warning=FALSE}
+library(ggplot2); library(knitr); library(caret)
+opts_chunk$set(message=FALSE, warning=FALSE)
+```
+First, we download training and testing datasets from course website.
+```{r }
+## load training dataset
+URLTR<- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+if (!file.exists("pml-training.csv")) 
+     download.file(URLTR, "pml-training.csv")
+if (!exists("pml_training")) 
+     pml_training<- read.csv("pml-training.csv", na.strings = c("","NA"))
+
+## load testing dataset
+URLTT<- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+fileTT <- "pml-testing.csv"
+if (!file.exists("pml-testing.csv"))
+    download.file(URLTT, "pml-testing.csv")
+if (!exists("pml_testing"))
+    pml_testing<- read.csv("pml-testing.csv", na.strings = c("","NA"))
+```
+
+A quick look at the datasets shows many columes are mostly `NA` and should be excluded from model building. We will also remove columes which are not relavant to prediction, such as lifter's names and window information. Variables with near zero variances are excluded to reduce number of predictors. Any cleaning done on the training dataset is performed exactly the same way on the testing dataset.
+
+```{r}
+## remove NA columes
+noneNA <- colSums(is.na(pml_training))==0
+training <- pml_training[,noneNA]
+testing <- pml_testing[,noneNA]
+
+## remove timestamp, window info
+rmCols <- grep("timestamp|window", names(training))
+training <- training[,-rmCols]
+testing <- testing[,-rmCols]
+
+## remove index and user info
+training <- training[,-c(1,2)]
+testing <- testing[,-c(1,2)]
+
+## remove variables with near zero variance
+nsv <- nearZeroVar(training, saveMetrics=T)
+training <- training[,!nsv$nzv]
+testing <- testing[,!nsv$nzv]
+```
+Now `training` dataset has `r ncol(training)-1` potential predictors and `classe`, the prediction outcome.
+
+## Fitting Models
+
+Before fitting any models, we will set aside 25% training data for evaluating accuracy and choosing the final model.
+
+```{r}
+inTrain <- createDataPartition(y=training$classe, p=0.75, list=F)
+trainTr <- training[inTrain,]
+trainEval <- training[-inTrain,]
+```
+
+With the high dimension this dataset presents, linear models are unlikely to fit well. Therefore, we will use the 2 most widely used tree-based algorithms to build the model.
+
+### Random Forest
+
+A Random forest model is built with 3-fold cross validation.
+
+```{r modRF, cache=TRUE}
+set.seed(123)
+modRF <- train(classe ~ ., data=trainTr, 
+               method="rf", importance=T,
+               trControl=trainControl(method="cv", number=3))
+modRF
+```
+
+Then we evaluate this model on the evaluation data we had set aside from the original training data.
+
+```{r}
+cfmRF <- confusionMatrix(predict(modRF,trainEval),trainEval$classe)
+```
+
+The random forest model achieved an accuracy of `r cfmRF$overall["Accuracy"]*100`%. The out-of-sample error rate is **`r (1-cfmRF$overall["Accuracy"])*100`%**, which is satisfactory.
+
+### Boosting
+
+A Stochastic Gradient Boosting model is built with 3-fold cross validation.
+
+```{r modGBM, cache=TRUE}
+set.seed(1234)
+modGBM <- train(classe ~ ., data=trainTr, 
+                method="gbm", verbose=F,
+                trControl=trainControl(method="cv", number=3))
+modGBM
+```
+
+As before, we will calculate the accuracy of the boosting model with the evaluation dataset.
+
+```{r}
+cfmGBM <- confusionMatrix(predict(modGBM,trainEval),trainEval$classe)
+```
+
+The boosting model achieved an accuracy of `r cfmGBM$overall["Accuracy"]*100`%. The out-of-sample error rate is **`r (1-cfmGBM$overall["Accuracy"])*100`%**, which is still below 5% though slightly higher than the random forest model.
+
+## Predictions
+
+Given that random forest model gives a better accuracy when tested on the evaluation dataset, we will use the random forest model to perform prediction on the testing set.
+
+```{r}
+answers <- as.character(predict(modRF, testing))
+answers
+```
+
+Just for comparison, we will predict with the boosting model.
+
+```{r}
+answersGBM <- as.character(predict(modGBM, testing))
+answersGBM
+```
+
+The two predictions turn out to be exactly the same. We are quite confident with the prediction results.
+
+```{r echo=FALSE}
+## for coursera submission
+pml_write_files = function(x){
+    n = length(x)
+    for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+    }
+}
+pml_write_files(answers)
+```
+
+## Conclusion
+
+Due to the high dimensional nature of the dataset, we have built our prediction models based on random forest and stochastic gradient boosting, widely accepted as the two top performing algorithms. Cross validation with 3-fold was used in model fitting. 
+
+Both models achieved an out-of-sample error of less than 5%. We chose random forest model, which has a lower out-of-sample error rate, as our final model to perform prediction on the testing data. 
